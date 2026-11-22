@@ -3,6 +3,11 @@
 **/*.rs.bk
 *.pdb
 
+# .NET FFI sample build artifacts (copy of the shared library + dotnet output)
+examples/dotnet/bin/
+examples/dotnet/obj/
+examples/dotnet/all_smi.dll
+
 # Cargo
 Cargo.lock
 

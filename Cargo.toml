@@ -161,6 +161,7 @@ level_zero = []
 [lib]
 name = "all_smi"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "all-smi"
@@ -178,6 +179,15 @@ lto = true            # Link-Time Optimization
 codegen-units = 1     # Single codegen unit for better optimization
 panic = "abort"       # Abort on panic (removes unwind code)
 opt-level = "z"       # Optimize for size
+
+# Shared-library (FFI) build for all_smi.dll / liball_smi.so / liball_smi.dylib.
+# Same optimizations as release, but panics unwind instead of aborting so the
+# `catch_unwind` guards in src/ffi.rs can translate Rust panics into NULL
+# returns rather than killing the host process.
+# Build with: cargo build --no-default-features --profile ffi
+[profile.ffi]
+inherits = "release"
+panic = "unwind"
 
 [lints.clippy]
 # Enable the same lints that CI uses

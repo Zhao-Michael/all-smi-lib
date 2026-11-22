@@ -177,6 +177,12 @@ pub mod storage;
 /// Common traits for collectors and exporters.
 pub mod traits;
 
+/// C ABI facade for shared-library (`cdylib`) embedding: the `allsmi_*`
+/// entry points backed by the handle type [`ffi::AllSmiHandle`]. See the
+/// module docs for the calling convention, error handling, and JSON
+/// schemas. Compiles without the `cli` feature.
+pub mod ffi;
+
 /// Terminal UI components.
 #[cfg(feature = "cli")]
 pub mod ui;
