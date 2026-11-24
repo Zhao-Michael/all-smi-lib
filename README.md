@@ -114,7 +114,7 @@ Configuration is optional. To keep an exporter running across reboots, follow th
 
 ## Recent Updates
 
-- **v0.28.1 (2026/10/20):** Added Rebellions REBEL100 support with per-process NPU utilization and SKU-based model labels, stopped reporting non-Habana accel nodes as Intel Gaudi, and updated russh and luwen.
+- **v0.29.1 (2026/11/24):** Stopped publishing the Intel macOS archive so releases no longer wait on the self-hosted Intel Mac, moved CI to the Node 24 releases of GitHub Actions, and brings the 0.29 changes to Homebrew.
 
 ## Documentation
 

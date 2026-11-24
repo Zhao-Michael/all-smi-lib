@@ -29,6 +29,7 @@ use crate::ui::topology::TopologyViewMode;
 use crate::utils::RuntimeEnvironment;
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Input mode for the `/` filter bar.
@@ -134,7 +135,7 @@ pub struct ConnectionStatus {
     /// "not applicable" (local mode, replay mode).
     pub transport_chip: Option<String>,
     /// Short connection-state tag (`connecting`, `connected`,
-    /// `auth-failed`, `timeout`, `disconnected`). Used by the TUI to
+    /// `auth-failed`, `timeout`, `backing-off`, `disconnected`). Used by the TUI to
     /// render a per-host status chip. `None` when the status has not
     /// yet been set.
     pub connection_state: Option<String>,
@@ -172,28 +173,18 @@ impl ConnectionStatus {
         self.last_update = Instant::now();
         // Classify the error into a compact state chip. The error
         // messages the SSH client produces carry the chip label as
-        // the prefix — parse it out rather than re-deriving.
-        let chip = if self
-            .last_error
-            .as_deref()
-            .unwrap_or("")
-            .starts_with("auth-failed")
-        {
+        // the prefix — parse it out rather than re-deriving. The HTTP
+        // scraper uses the same convention for `timeout` and for
+        // `backing-off` (a host skipped after repeated failures, #500).
+        let error = self.last_error.as_deref().unwrap_or("");
+        let chip = if error.starts_with("auth-failed") {
             "auth-failed"
-        } else if self
-            .last_error
-            .as_deref()
-            .unwrap_or("")
-            .starts_with("timeout")
-        {
+        } else if error.starts_with("timeout") {
             "timeout"
-        } else if self
-            .last_error
-            .as_deref()
-            .unwrap_or("")
-            .starts_with("host-key-rejected")
-        {
+        } else if error.starts_with("host-key-rejected") {
             "host-key-rejected"
+        } else if error.starts_with("backing-off") {
+            "backing-off"
         } else {
             "disconnected"
         };
@@ -268,7 +259,15 @@ pub struct UsersAggregationCache {
     /// `None` on cold startup before any aggregation has been
     /// performed.
     pub data_version: Option<u64>,
-    pub result: UserAggregationResult,
+    /// Shared so the render snapshot and the key handlers take a
+    /// pointer copy instead of cloning every `UserAggregate`.
+    pub result: Arc<UserAggregationResult>,
+    /// `(collector_data_version, sort, filter_sys)` the visible order
+    /// below was computed for.
+    pub order_key: Option<(u64, UserSortKey, bool)>,
+    /// Indices into `result.users` in display order. See
+    /// [`AppState::users_visible_order`].
+    pub visible_order: Arc<[usize]>,
 }
 
 #[derive(Clone)]
@@ -296,9 +295,9 @@ pub struct AppState {
     pub storage_scroll_offset: usize,
     pub tab_scroll_offset: usize,
     pub process_horizontal_scroll_offset: usize,
-    pub device_name_scroll_offsets: HashMap<String, usize>,
-    pub host_id_scroll_offsets: HashMap<String, usize>,
-    pub cpu_name_scroll_offsets: HashMap<String, usize>,
+    /// Number of frames drawn so far. Drives the marquee (see
+    /// [`crate::ui::text::marquee_offset`]), the loading bar and the LED
+    /// grid page rotation, so it advances once per drawn frame only.
     pub frame_counter: u64,
     pub storage_info: Vec<StorageInfo>,
     pub show_help: bool,
@@ -420,6 +419,13 @@ pub struct AppState {
     /// seeds the integrator's lifetime counter so Prometheus stays
     /// monotonic across restarts.
     pub energy_wal_replay: WalReplayIndex,
+    /// The Prometheus exposition served by `/metrics` in api mode,
+    /// rendered once per collection tick by the collection loop instead of
+    /// once per scrape (issue #503). Starts as the not-ready render
+    /// (`all_smi_up 0` plus build info), so the endpoint is never
+    /// byte-empty before the first tick (issue #324). Unused by the TUI
+    /// modes.
+    pub metrics_body: axum::body::Bytes,
     /// Resolved `[display]` config (color scheme / gauge style / LED
     /// grid toggle) from the merged `Settings`. Renderers consult this
     /// to decide whether to draw the LED grid, which glyph set the
@@ -485,7 +491,7 @@ impl AppState {
         let energy = EnergyAccountant::new(std::time::Duration::from_secs(
             energy_config.gap_interpolate_seconds,
         ));
-        AppState {
+        let mut state = AppState {
             gpu_info: Vec::new(),
             cpu_info: Vec::new(),
             memory_info: Vec::new(),
@@ -510,9 +516,6 @@ impl AppState {
             storage_scroll_offset: 0,
             tab_scroll_offset: 0,
             process_horizontal_scroll_offset: 0,
-            device_name_scroll_offsets: HashMap::new(),
-            host_id_scroll_offsets: HashMap::new(),
-            cpu_name_scroll_offsets: HashMap::new(),
             frame_counter: 0,
             storage_info: Vec::new(),
             show_help: false,
@@ -561,12 +564,15 @@ impl AppState {
             energy,
             energy_config,
             energy_wal_replay: WalReplayIndex::default(),
+            metrics_body: axum::body::Bytes::new(),
             display_config: DisplaySettings {
                 color_scheme: "default".to_string(),
                 gauge_style: "blocks".to_string(),
                 show_led_grid: true,
             },
-        }
+        };
+        crate::api::handlers::refresh_metrics_body(&mut state);
+        state
     }
 
     /// Helper used by the event handler: push a query onto the
@@ -629,7 +635,7 @@ impl AppState {
     /// a UI-only event like a sort toggle bumps `data_version` but
     /// leaves `collector_data_version` alone, so typing `m`/`u`/`p`
     /// etc. re-uses the aggregation rather than re-grouping 5 000 rows.
-    pub fn users_aggregation(&mut self) -> &UserAggregationResult {
+    pub fn users_aggregation(&mut self) -> &Arc<UserAggregationResult> {
         use crate::ui::aggregation::user::{GpuForAggregation, HostSnapshot, aggregate_users};
 
         if self.users_aggregation_cache.data_version == Some(self.collector_data_version) {
@@ -734,9 +740,36 @@ impl AppState {
 
         self.users_aggregation_cache = UsersAggregationCache {
             data_version: Some(self.collector_data_version),
-            result,
+            result: Arc::new(result),
+            order_key: None,
+            visible_order: Arc::from(Vec::new()),
         };
         &self.users_aggregation_cache.result
+    }
+
+    /// Indices into [`Self::users_aggregation`]'s `users` in the order
+    /// the Users table shows them (system accounts hidden when
+    /// `filter_sys` is on, sorted by the active key).
+    ///
+    /// Memoised on `(collector_data_version, sort, filter_sys)`, so the
+    /// renderer, the `Enter` drill-down and the CSV export share one
+    /// order and a frame with no data or sort change does no work.
+    pub fn users_visible_order(&mut self) -> &Arc<[usize]> {
+        use crate::ui::aggregation::user::visible_user_order;
+
+        let _ = self.users_aggregation();
+        let key = (
+            self.collector_data_version,
+            self.users_tab_state.sort,
+            self.users_tab_state.filter_sys,
+        );
+        if self.users_aggregation_cache.order_key != Some(key) {
+            let order =
+                visible_user_order(&self.users_aggregation_cache.result.users, key.1, key.2);
+            self.users_aggregation_cache.visible_order = Arc::from(order);
+            self.users_aggregation_cache.order_key = Some(key);
+        }
+        &self.users_aggregation_cache.visible_order
     }
 }
 
@@ -926,6 +959,8 @@ mod tests {
         assert_eq!(cs.connection_state.as_deref(), Some("timeout"));
         cs.mark_failure("host-key-rejected: host key not trusted".into());
         assert_eq!(cs.connection_state.as_deref(), Some("host-key-rejected"));
+        cs.mark_failure("backing-off: next retry in 4s (3 consecutive failures)".into());
+        assert_eq!(cs.connection_state.as_deref(), Some("backing-off"));
         cs.mark_failure("other: stuff".into());
         assert_eq!(cs.connection_state.as_deref(), Some("disconnected"));
         cs.mark_success();

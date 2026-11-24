@@ -23,6 +23,7 @@ This document provides comprehensive documentation for using `all-smi` as a Rust
   - [Using the Prelude](#using-the-prelude)
   - [Custom Configuration](#custom-configuration)
   - [Thread Safety](#thread-safety)
+  - [CPU Temperature Sensor (Linux)](#cpu-temperature-sensor-linux)
   - [Low-Level Access](#low-level-access)
 - [Complete Examples](#complete-examples)
 - [Best Practices](#best-practices)
@@ -178,7 +179,7 @@ fn main() -> Result<()> {
 | `new()` | `Result<AllSmi>` | Create instance with default config |
 | `with_config(config)` | `Result<AllSmi>` | Create instance with custom config |
 | `get_gpu_info()` | `Vec<GpuInfo>` | Get all GPU/NPU information |
-| `get_process_info()` | `Vec<ProcessInfo>` | Get GPU process information |
+| `get_process_info()` | `Vec<ProcessInfo>` | Get process information, one row per (PID, device); a PID without a GPU row appears once |
 | `get_vgpu_info()` | `Vec<VgpuHostInfo>` | NVIDIA vGPU host/instance metrics; empty when unavailable |
 | `get_mig_info()` | `Vec<MigGpuInfo>` | NVIDIA MIG mode/instance metrics; empty when unavailable |
 | `get_cpu_info()` | `Vec<CpuInfo>` | Get CPU information |
@@ -837,6 +838,10 @@ async fn main() -> Result<()> {
 On hosts with an NVIDIA driver, the NVML handle is process-wide. Every `AllSmi` instance shares one handle, and `libnvidia-ml` stays loaded until the process exits. Constructing and dropping `AllSmi` repeatedly is cheap and does not leak file descriptors; dropping an instance never shuts NVML down for the others.
 
 If NVML cannot initialise (for example the device nodes are hidden), `get_gpu_info()` falls back to `nvidia-smi` and does not retry NVML until a back-off expires: 30 seconds, doubling to 5 minutes on repeated failures, and reset after a successful init.
+
+### CPU Temperature Sensor (Linux)
+
+On Linux, `CpuInfo::temperature` comes from one sysfs file chosen once per process, at the first CPU read: a CPU driver (`coretemp`, `k10temp`, ...), then a CPU thermal zone (the original four types, then ARM SoC types, then `bigcore0-thermal`; zone index order within each), then a motherboard sensor chip input labelled for the CPU (`CPU Package`, `PECI Agent 0`, `TSI0_TEMP`, `CPUTIN`, ...) on any chip except `asus_wmi_sensors`, then an input whose `temp*_type` reports Intel PECI or AMD SB-TSI (for unlabelled chips such as `it87`), then a CPU label on an `asus_wmi_sensors` input (last, because polling it can upset some BIOSes), then legacy fixed paths. Set `ALL_SMI_CPU_TEMP_SENSOR` before the first read to choose the sensor yourself, as `<driver>:temp<N>`, `<driver>:<label>`, or an absolute `/sys` path. An invalid value is ignored and automatic selection continues. See [Wrong or missing CPU temperature on Linux](troubleshooting.md#wrong-or-missing-cpu-temperature-on-linux).
 
 ### Low-Level Access
 

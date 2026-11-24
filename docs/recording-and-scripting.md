@@ -97,6 +97,9 @@ all-smi record --source remote \
   --hosts http://gpu-node1:9090,http://gpu-node2:9090 \
   --output cluster.ndjson.gz --compress gzip --duration 1h
 
+# Remote targets from a hostfile (merged with any --hosts; read once at start).
+all-smi record --source remote --hostfile hosts.txt --output cluster.ndjson.zst
+
 # Replay a captured file — identical TUI to the live view.
 all-smi view --replay incident.ndjson.zst
 
@@ -122,6 +125,8 @@ all-smi view --replay incident.ndjson.zst --speed 4.0
 The status bar shows `REPLAY | HH:MM:SS | frame N / M | Xx | playing/paused`.
 Filter-edit mode (`/`) still takes precedence over replay keys, so the
 operator can filter the visible GPUs mid-playback.
+
+Playback follows the recorded frame timestamps divided by the speed setting, so a recording made at `--interval 5` advances one frame every 5 seconds at `1.0x`. At the end of the recording playback pauses on the last frame, or restarts from the first frame when loop is on. The elapsed time in the status bar counts from the first frame and stays correct after seeks.
 
 For the complete option list, run `all-smi record --help` and `all-smi view --help`. Compression follows `--compress`, then `record.compress` (default `zstd`), not just the output suffix. Match the suffix to the selected codec because replay detects compression from the filename. Rotation limits count uncompressed bytes.
 

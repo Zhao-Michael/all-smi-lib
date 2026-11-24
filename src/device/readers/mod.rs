@@ -41,6 +41,8 @@ pub(crate) mod nvidia_dla_clock;
 pub mod nvidia_hardware;
 pub mod nvidia_jetson;
 pub mod nvidia_mig;
+// Back-off shared by the two `nvidia-smi` fallback queries (#502).
+pub(crate) mod nvidia_smi_fallback;
 pub(crate) mod nvidia_soc;
 // WDDM per-process memory for NVIDIA; compiled under `test` everywhere for
 // the same reason as `windows_gpu_perf` below.
@@ -123,6 +125,11 @@ pub mod intel_gpu_sysfs;
 
 #[cfg(target_os = "windows")]
 pub mod intel_gpu_windows;
+
+// Cached `Win32_VideoController` rows shared by the AMD and Intel Windows
+// readers (issue #501).
+#[cfg(target_os = "windows")]
+pub mod windows_video_controller;
 
 // Vendor-neutral Windows GPU metrics (DXGI + PDH).
 //
